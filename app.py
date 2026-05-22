@@ -81,7 +81,7 @@ class Config:
             secondary_username=(os.getenv("BOOKING_SECONDARY_USERNAME") or "").strip() or None,
             secondary_password=(os.getenv("BOOKING_SECONDARY_PASSWORD") or "").strip() or None,
             secondary_pace_labels=secondary_pace_labels,
-            booking_retry_cooldown_seconds=int(os.getenv("BOOKING_RETRY_COOLDOWN_SECONDS", "900")),
+            booking_retry_cooldown_seconds=int(os.getenv("BOOKING_RETRY_COOLDOWN_SECONDS", "30")),
             browser_timeout_ms=int(os.getenv("BROWSER_TIMEOUT_MS", "30000")),
         )
 

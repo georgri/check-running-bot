@@ -53,7 +53,7 @@ The service uses environment variables from `.env` on VPS:
 - `BOOKING_SECONDARY_USERNAME` (optional second account login)
 - `BOOKING_SECONDARY_PASSWORD` (optional second account password)
 - `BOOKING_SECONDARY_PACE_LABELS` (example: `3:56-4:05|3:55-4:05`)
-- `BOOKING_RETRY_COOLDOWN_SECONDS` (default: `900`)
+- `BOOKING_RETRY_COOLDOWN_SECONDS` (default: `30`)
 - `BROWSER_TIMEOUT_MS` (default: `30000`)
 
 ## Auto-booking behavior
