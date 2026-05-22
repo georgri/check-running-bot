@@ -24,6 +24,7 @@ fi
 python3 -m venv "\${REMOTE_DIR}/.venv"
 "\${REMOTE_DIR}/.venv/bin/pip" install --upgrade pip >/dev/null
 "\${REMOTE_DIR}/.venv/bin/pip" install -r "\${REMOTE_DIR}/requirements.txt" >/dev/null
+"\${REMOTE_DIR}/.venv/bin/python" -m playwright install --with-deps chromium >/dev/null
 
 if [ ! -f "\${REMOTE_DIR}/.env" ]; then
   cat > "\${REMOTE_DIR}/.env" <<'ENV'
@@ -32,10 +33,18 @@ TELEGRAM_CHAT_ID=
 RUNC_USERNAME=
 RUNC_PASSWORD=
 CHECK_URL=https://runc.run/check-in/217/
-SOLD_OUT_MARKER=Свободные места на 42,2 км закончились
+SOLD_OUT_MARKER="Свободные места на 42,2 км закончились"
 POLL_INTERVAL_SECONDS=60
 REQUEST_TIMEOUT_SECONDS=30
 STATE_FILE=/root/check-running-bot/state.json
+AUTO_BOOK_ENABLED=true
+BOOKING_DISTANCE_LABELS=42,2 км|42.2 км|42 км
+BOOKING_PRIMARY_PACE_LABELS=3:31-3:45|3:30-3:45|3:31–3:45
+BOOKING_SECONDARY_USERNAME=
+BOOKING_SECONDARY_PASSWORD=
+BOOKING_SECONDARY_PACE_LABELS=3:56-4:05|3:55-4:05|3:56–4:05
+BOOKING_RETRY_COOLDOWN_SECONDS=900
+BROWSER_TIMEOUT_MS=30000
 ENV
   chmod 600 "\${REMOTE_DIR}/.env"
   echo "Created \${REMOTE_DIR}/.env template. Fill in credentials and rerun deploy."

@@ -9,6 +9,8 @@ Telegram bot service that monitors registration availability for the White Night
 - Checks if the sold-out text is present:
   - `Свободные места на 42,2 км закончились`
 - Sends a Telegram alert to your channel when slots become available.
+- Automatically attempts to submit registration when slots are available.
+- Sends payment link to Telegram after successful booking.
 - Sends diagnostic messages on:
   - service start
   - service shutdown
@@ -45,6 +47,23 @@ The service uses environment variables from `.env` on VPS:
 - `POLL_INTERVAL_SECONDS` (default: `60`)
 - `REQUEST_TIMEOUT_SECONDS` (default: `30`)
 - `STATE_FILE` (default: `/root/check-running-bot/state.json`)
+- `AUTO_BOOK_ENABLED` (default: `true`)
+- `BOOKING_DISTANCE_LABELS` (default: `42,2 км|42.2 км|42 км`)
+- `BOOKING_PRIMARY_PACE_LABELS` (example: `3:31-3:45|3:30-3:45`)
+- `BOOKING_SECONDARY_USERNAME` (optional second account login)
+- `BOOKING_SECONDARY_PASSWORD` (optional second account password)
+- `BOOKING_SECONDARY_PACE_LABELS` (example: `3:56-4:05|3:55-4:05`)
+- `BOOKING_RETRY_COOLDOWN_SECONDS` (default: `900`)
+- `BROWSER_TIMEOUT_MS` (default: `30000`)
+
+## Auto-booking behavior
+
+- When slot is detected as available, bot sends availability notification first.
+- Then bot attempts UI booking in headless Chromium (Playwright).
+- Bot signs in, selects configured distance and pace, clicks `Зарегистрироваться`, and looks for payment URL.
+- Supports booking for both primary and optional secondary account in one availability window.
+- Payment link is sent to Telegram channel per account.
+- Bot stores per-account booking status in state file and avoids duplicate booking attempts after success.
 
 ## Deploy
 
