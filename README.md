@@ -53,6 +53,8 @@ The service uses environment variables from `.env` on VPS:
 - `BOOKING_SECONDARY_USERNAME` (optional second account login)
 - `BOOKING_SECONDARY_PASSWORD` (optional second account password)
 - `BOOKING_SECONDARY_PACE_LABELS` (example: `3:56-4:05|3:55-4:05`)
+- `CHECK_MAX_RETRIES` (default: `3`) - retries before reporting check error
+- `CHECK_RETRY_DELAY_SECONDS` (default: `2`) - delay between check retries
 - `BOOKING_RETRY_COOLDOWN_SECONDS` (default: `30`)
 - `BROWSER_TIMEOUT_MS` (default: `30000`)
 
@@ -64,6 +66,21 @@ The service uses environment variables from `.env` on VPS:
 - Supports booking for both primary and optional secondary account in one availability window.
 - Payment link is sent to Telegram channel per account.
 - Bot stores per-account booking status in state file and avoids duplicate booking attempts after success.
+- Bot reports recoverable check error only after check retries are exhausted.
+
+## Telegram status command
+
+- Tag the bot in channel with `status` (example: `@your_bot_username status`).
+- Bot replies with the 5 last check attempt results including timestamps.
+
+## Service health check
+
+Run:
+
+```bash
+chmod +x service-status.sh
+./service-status.sh
+```
 
 ## Deploy
 

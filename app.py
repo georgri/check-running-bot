@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -43,6 +44,8 @@ class Config:
     secondary_pace_labels: list[str]
     booking_retry_cooldown_seconds: int
     browser_timeout_ms: int
+    check_max_retries: int
+    check_retry_delay_seconds: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -83,6 +86,8 @@ class Config:
             secondary_pace_labels=secondary_pace_labels,
             booking_retry_cooldown_seconds=int(os.getenv("BOOKING_RETRY_COOLDOWN_SECONDS", "30")),
             browser_timeout_ms=int(os.getenv("BROWSER_TIMEOUT_MS", "30000")),
+            check_max_retries=int(os.getenv("CHECK_MAX_RETRIES", "3")),
+            check_retry_delay_seconds=int(os.getenv("CHECK_RETRY_DELAY_SECONDS", "2")),
         )
 
 
@@ -92,6 +97,7 @@ class TelegramClient:
         self.timeout_seconds = timeout_seconds
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.update_offset: Optional[int] = None
+        self.bot_username: Optional[str] = None
 
     def _request(self, method: str, params: dict) -> dict:
         resp = requests.post(
@@ -113,39 +119,31 @@ class TelegramClient:
             },
         )
 
-    def discover_chat_id(self) -> Optional[str]:
+    def get_bot_username(self) -> Optional[str]:
+        if self.bot_username:
+            return self.bot_username
+        data = self._request("getMe", {})
+        result = data.get("result") or {}
+        username = result.get("username")
+        if username:
+            self.bot_username = str(username)
+        return self.bot_username
+
+    def get_updates(self, allowed_updates: Optional[list[str]] = None) -> list[dict]:
         payload = {
             "timeout": 1,
-            "allowed_updates": ["channel_post", "my_chat_member", "message"],
+            "allowed_updates": allowed_updates or ["channel_post", "my_chat_member", "message"],
         }
         if self.update_offset is not None:
             payload["offset"] = self.update_offset
 
         data = self._request("getUpdates", payload)
         updates = data.get("result", [])
-        chat_id: Optional[str] = None
-
         for item in updates:
             update_id = item.get("update_id")
             if update_id is not None:
                 self.update_offset = int(update_id) + 1
-
-            channel_post = item.get("channel_post") or {}
-            chat = channel_post.get("chat") or {}
-            if chat.get("id"):
-                chat_id = str(chat["id"])
-
-            my_chat_member = item.get("my_chat_member") or {}
-            chat = my_chat_member.get("chat") or {}
-            if chat.get("type") == "channel" and chat.get("id"):
-                chat_id = str(chat["id"])
-
-            message = item.get("message") or {}
-            chat = message.get("chat") or {}
-            if chat.get("type") in {"channel", "supergroup"} and chat.get("id"):
-                chat_id = str(chat["id"])
-
-        return chat_id
+        return updates
 
 
 class SlotMonitor:
@@ -156,7 +154,9 @@ class SlotMonitor:
         self.telegram = TelegramClient(cfg.telegram_bot_token, cfg.request_timeout_seconds)
         self.stop_requested = False
         self.chat_id = cfg.telegram_chat_id
+        self.bot_username: Optional[str] = None
         self.last_available: Optional[bool] = None
+        self.attempt_history: list[dict] = []
         self.accounts = self._build_accounts()
         self.account_state: dict[str, dict] = {
             account.account_id: {"completed": False, "order_url": None, "last_attempt_ts": 0}
@@ -192,6 +192,7 @@ class SlotMonitor:
             with open(self.cfg.state_file, "r", encoding="utf-8") as f:
                 state = json.load(f)
             self.last_available = state.get("last_available")
+            self.attempt_history = state.get("attempt_history", [])
             account_state = state.get("account_state", {})
             for account in self.accounts:
                 existing = account_state.get(account.account_id, {})
@@ -213,6 +214,7 @@ class SlotMonitor:
     def _save_state(self) -> None:
         state = {
             "last_available": self.last_available,
+            "attempt_history": self.attempt_history[-50:],
             "account_state": self.account_state,
             "updated_at": int(time.time()),
         }
@@ -228,19 +230,67 @@ class SlotMonitor:
         except Exception as exc:
             logging.exception("Failed to send Telegram message: %s", exc)
 
-    def _try_discover_chat_id(self) -> None:
+    def _record_attempt(self, outcome: str, details: str) -> None:
+        self.attempt_history.append(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "outcome": outcome,
+                "details": details,
+            }
+        )
+        self.attempt_history = self.attempt_history[-50:]
+
+    def _format_last_attempts(self, limit: int = 5) -> str:
+        items = self.attempt_history[-limit:]
+        if not items:
+            return "No attempts recorded yet."
+        lines = ["Last attempts:"]
+        for item in items:
+            lines.append(f"{item.get('ts')} | {item.get('outcome')} | {item.get('details')}")
+        return "\n".join(lines)
+
+    def _discover_chat_id_from_updates(self, updates: list[dict]) -> None:
         if self.chat_id:
             return
+        for item in updates:
+            for key in ("channel_post", "my_chat_member", "message"):
+                payload = item.get(key) or {}
+                chat = payload.get("chat") or {}
+                chat_id = chat.get("id")
+                if chat_id:
+                    self.chat_id = str(chat_id)
+                    logging.info("Discovered Telegram chat_id: %s", self.chat_id)
+                    self._notify("Bot connected to this channel/chat. Slot monitor is now able to send alerts.")
+                    return
+
+    def _handle_commands_from_updates(self, updates: list[dict]) -> None:
+        if not self.bot_username:
+            return
+        mention = f"@{self.bot_username}".lower()
+        for item in updates:
+            payload = item.get("channel_post") or item.get("message") or {}
+            text = str(payload.get("text") or "")
+            if not text:
+                continue
+            lowered = text.lower()
+            if mention not in lowered:
+                continue
+            if not any(word in lowered for word in ("status", "статус", "attempt", "попыт")):
+                continue
+            chat = payload.get("chat") or {}
+            command_chat_id = chat.get("id")
+            if command_chat_id:
+                self.telegram.send_message(str(command_chat_id), self._format_last_attempts(5))
+
+    def _poll_updates(self) -> None:
         try:
-            discovered = self.telegram.discover_chat_id()
-            if discovered:
-                self.chat_id = discovered
-                logging.info("Discovered Telegram chat_id: %s", self.chat_id)
-                self._notify(
-                    "Bot connected to this channel/chat. Slot monitor is now able to send alerts."
-                )
+            updates = self.telegram.get_updates(["channel_post", "my_chat_member", "message"])
+            if not self.bot_username:
+                self.bot_username = self.telegram.get_bot_username()
+            self._discover_chat_id_from_updates(updates)
+            self._handle_commands_from_updates(updates)
         except Exception as exc:
-            logging.warning("Failed to discover chat_id via getUpdates: %s", exc)
+            logging.warning("Failed to poll updates/commands: %s", exc)
 
     def _create_authenticated_session(self, username: str, password: str) -> requests.Session:
         session = requests.Session()
@@ -284,6 +334,25 @@ class SlotMonitor:
 
         sold_out = self.cfg.sold_out_marker in html
         return not sold_out
+
+    def _check_slot_availability_with_retries(self) -> bool:
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, self.cfg.check_max_retries + 1):
+            try:
+                available = self._check_slot_availability()
+                self._record_attempt("ok", f"attempt={attempt} available={available}")
+                return available
+            except UnrecoverableError:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                self._record_attempt("retry_error", f"attempt={attempt} error={type(exc).__name__}: {exc}")
+                if attempt < self.cfg.check_max_retries:
+                    time.sleep(self.cfg.check_retry_delay_seconds)
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Slot availability check failed without an error")
 
     def _click_first(self, page: Page, selectors: list[str], timeout_ms: int = 4000) -> bool:
         for selector in selectors:
@@ -461,7 +530,7 @@ class SlotMonitor:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
         self._load_state()
-        self._try_discover_chat_id()
+        self._poll_updates()
         self._notify(
             f"White Nights 42.2 monitor started. Check interval: {self.cfg.poll_interval_seconds} seconds."
         )
@@ -471,8 +540,8 @@ class SlotMonitor:
 
         while not self.stop_requested:
             try:
-                self._try_discover_chat_id()
-                available = self._check_slot_availability()
+                self._poll_updates()
+                available = self._check_slot_availability_with_retries()
                 logging.info("Slot check complete: available=%s", available)
 
                 if available and self.last_available is not True:
