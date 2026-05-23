@@ -308,6 +308,9 @@ class SlotMonitor:
             target.target_id: {account.account_id: self._new_account_state() for account in self.accounts}
             for target in cfg.targets
         }
+        self.consecutive_recoverable_errors = 0
+        self.last_recoverable_error_signature: Optional[str] = None
+        self.recoverable_error_notified_for_streak = False
 
     def _new_account_state(self) -> dict:
         return {
@@ -452,6 +455,31 @@ class SlotMonitor:
                     )
                 lines.append(line)
         return "\n".join(lines)
+
+    def _refresh_missing_booked_payment_windows(self) -> None:
+        updated = False
+        for target in self.cfg.targets:
+            for account in self.accounts:
+                acc_state = self._get_account_state(target, account)
+                if str(acc_state.get("status") or "register") != "booked":
+                    continue
+                if acc_state.get("payment_window_remaining"):
+                    continue
+                try:
+                    remaining = self._probe_payment_window_remaining(account, target)
+                except Exception as exc:
+                    logging.info(
+                        "Startup refresh could not resolve payment window for %s/%s: %s",
+                        target.target_id,
+                        account.account_id,
+                        exc,
+                    )
+                    continue
+                if remaining:
+                    acc_state["payment_window_remaining"] = remaining
+                    updated = True
+        if updated:
+            self._save_state()
 
     def _discover_chat_id_from_updates(self, updates: list[dict]) -> None:
         if self.chat_id:
@@ -1228,6 +1256,7 @@ class SlotMonitor:
         if self.cfg.auto_book_enabled:
             account_list = ", ".join(account.username for account in self.accounts)
             self._notify(f"Automatic booking is enabled for accounts: {account_list}")
+        self._refresh_missing_booked_payment_windows()
         self._notify(self._build_startup_runs_state_message())
 
         while not self.stop_requested:
@@ -1264,13 +1293,34 @@ class SlotMonitor:
                     if available:
                         self._maybe_auto_book(target)
 
+                # Successful monitor cycle resets recoverable error streak.
+                self.consecutive_recoverable_errors = 0
+                self.last_recoverable_error_signature = None
+                self.recoverable_error_notified_for_streak = False
+
             except UnrecoverableError as exc:
                 logging.exception("Unrecoverable error")
                 self._notify(f"Unrecoverable error: {exc}. Service will stop.")
                 return 1
             except Exception as exc:
                 logging.exception("Recoverable check error: %s", exc)
-                self._notify(f"Recoverable error during monitor cycle: {exc}")
+                error_signature = f"{type(exc).__name__}: {exc}"
+                if error_signature == self.last_recoverable_error_signature:
+                    self.consecutive_recoverable_errors += 1
+                else:
+                    self.last_recoverable_error_signature = error_signature
+                    self.consecutive_recoverable_errors = 1
+                    self.recoverable_error_notified_for_streak = False
+
+                if (
+                    self.consecutive_recoverable_errors >= 3
+                    and not self.recoverable_error_notified_for_streak
+                ):
+                    self._notify(
+                        "Recoverable error during monitor cycle "
+                        f"(consecutive: {self.consecutive_recoverable_errors}): {exc}"
+                    )
+                    self.recoverable_error_notified_for_streak = True
 
             for _ in range(self.cfg.poll_interval_seconds):
                 if self.stop_requested:
