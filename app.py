@@ -857,6 +857,28 @@ class SlotMonitor:
                 return candidate
         return None
 
+    def _extract_payment_window_remaining_from_html(self, html: str) -> Optional[str]:
+        countdown_values = re.findall(r'data-time-countdown=["\'](\d{1,8})["\']', html, flags=re.IGNORECASE)
+        if not countdown_values:
+            return None
+
+        seconds_candidates: list[int] = []
+        for raw in countdown_values:
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            if value > 0:
+                seconds_candidates.append(value)
+        if not seconds_candidates:
+            return None
+
+        # Multiple orders can exist on the page; report the earliest expiry.
+        total_seconds = min(seconds_candidates)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
     def _classify_account_page(
         self,
         target: RaceTarget,
@@ -915,6 +937,8 @@ class SlotMonitor:
         orders_resp.raise_for_status()
         text = _normalize_text_token(_strip_html(orders_resp.text))
         payment_window_remaining = self._extract_payment_window_remaining(text)
+        if not payment_window_remaining:
+            payment_window_remaining = self._extract_payment_window_remaining_from_html(orders_resp.text)
 
         target_keywords = self._target_order_keywords(target)
         has_target_reference = any(keyword in text for keyword in target_keywords)
