@@ -432,6 +432,23 @@ class SlotMonitor:
             )
         return "\n".join(lines)
 
+    def _build_startup_runs_state_message(self) -> str:
+        lines = ["Startup debug: monitored runs state"]
+        for target in self.cfg.targets:
+            for account in self.accounts:
+                acc_state = self._get_account_state(target, account)
+                status = str(acc_state.get("status") or "register")
+                registration_link = target.check_url
+                payment_link = str(acc_state.get("order_url") or "not set")
+                time_remaining = str(acc_state.get("payment_window_remaining") or "not detected")
+                lines.append(
+                    f"- {target.title} | account: {account.username} | status: {status}\n"
+                    f"  Registration link: {registration_link}\n"
+                    f"  Payment link: {payment_link}\n"
+                    f"  Time remaining to pay: {time_remaining}"
+                )
+        return "\n".join(lines)
+
     def _discover_chat_id_from_updates(self, updates: list[dict]) -> None:
         if self.chat_id:
             return
@@ -1169,6 +1186,7 @@ class SlotMonitor:
         if self.cfg.auto_book_enabled:
             account_list = ", ".join(account.username for account in self.accounts)
             self._notify(f"Automatic booking is enabled for accounts: {account_list}")
+        self._notify(self._build_startup_runs_state_message())
 
         while not self.stop_requested:
             try:
