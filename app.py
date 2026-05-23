@@ -439,14 +439,18 @@ class SlotMonitor:
                 acc_state = self._get_account_state(target, account)
                 status = str(acc_state.get("status") or "register")
                 registration_link = target.check_url
-                payment_link = str(acc_state.get("order_url") or "not set")
-                time_remaining = str(acc_state.get("payment_window_remaining") or "not detected")
-                lines.append(
+                line = (
                     f"- {target.title} | account: {account.username} | status: {status}\n"
-                    f"  Registration link: {registration_link}\n"
-                    f"  Payment link: {payment_link}\n"
-                    f"  Time remaining to pay: {time_remaining}"
+                    f"  Registration link: {registration_link}"
                 )
+                if status != "register":
+                    payment_link = str(acc_state.get("order_url") or "not set")
+                    time_remaining = str(acc_state.get("payment_window_remaining") or "not detected")
+                    line += (
+                        f"\n  Payment link: {payment_link}\n"
+                        f"  Time remaining to pay: {time_remaining}"
+                    )
+                lines.append(line)
         return "\n".join(lines)
 
     def _discover_chat_id_from_updates(self, updates: list[dict]) -> None:
@@ -827,7 +831,10 @@ class SlotMonitor:
         normalized = _normalize_text_token(text)
         keyword_windows = [
             r"время для оплаты[^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
+            r"время на оплат[уы][^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
             r"до конца оплаты[^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
+            r"до окончания оплаты[^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
+            r"до удаления заказа[^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
             r"осталось[^0-9]{0,20}(\d{1,2}:\d{2}(?::\d{2})?)",
         ]
         for pattern in keyword_windows:
@@ -838,6 +845,8 @@ class SlotMonitor:
         verbose_patterns = [
             r"осталось[^0-9]{0,20}((?:\d+\s*ч(?:ас(?:а|ов)?)?\s*)?(?:\d+\s*мин(?:ут(?:а|ы)?)?\s*)?(?:\d+\s*сек(?:унд(?:а|ы)?)?)?)",
             r"время для оплаты[^0-9]{0,20}((?:\d+\s*ч(?:ас(?:а|ов)?)?\s*)?(?:\d+\s*мин(?:ут(?:а|ы)?)?\s*)?(?:\d+\s*сек(?:унд(?:а|ы)?)?)?)",
+            r"время на оплат[уы][^0-9]{0,20}((?:\d+\s*ч(?:ас(?:а|ов)?)?\s*)?(?:\d+\s*мин(?:ут(?:а|ы)?)?\s*)?(?:\d+\s*сек(?:унд(?:а|ы)?)?)?)",
+            r"до удаления заказа[^0-9]{0,20}((?:\d+\s*ч(?:ас(?:а|ов)?)?\s*)?(?:\d+\s*мин(?:ут(?:а|ы)?)?\s*)?(?:\d+\s*сек(?:унд(?:а|ы)?)?)?)",
         ]
         for pattern in verbose_patterns:
             match = re.search(pattern, normalized, flags=re.IGNORECASE)
@@ -881,7 +890,16 @@ class SlotMonitor:
 
     def _target_order_keywords(self, target: RaceTarget) -> list[str]:
         if target.target_id == "half":
-            return ["северная столица", "21,1 км", "21.1 км"]
+            return [
+                "белые ночи",
+                "white nights",
+                "half marathon",
+                "полумарафон",
+                "21,1 км",
+                "21.1 км",
+                "21,1км",
+                "21.1км",
+            ]
         if target.target_id == "full":
             return ["белые ночи", "42,2 км", "42.2 км", "42 км"]
         return [target.title.lower()]
